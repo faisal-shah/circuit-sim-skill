@@ -1,0 +1,23 @@
+3-Stage RLC Bandpass Filter
+* Cascaded series-RLC stages with VCVS buffers, f0 ≈ 10 kHz
+* Stage 1
+L1 in n1 1m
+C1 n1 n2 253n
+R1 n2 0 100
+E1 s1 0 n2 0 1
+* Stage 2
+L2 s1 n3 1m
+C2 n3 n4 253n
+R2 n4 0 100
+E2 s2 0 n4 0 1
+* Stage 3
+L3 s2 n5 1m
+C3 n5 out 253n
+R3 out 0 100
+* Source
+Vin in 0 AC 1
+.ac dec 100 100 1MEG
+.meas ac fpeak MAX vdb(out)
+.meas ac f3dB_lo WHEN vdb(out)=-3 RISE=1
+.meas ac f3dB_hi WHEN vdb(out)=-3 FALL=1
+.end

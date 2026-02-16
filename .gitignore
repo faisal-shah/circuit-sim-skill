@@ -1,0 +1,15 @@
+# ngspice outputs
+*.raw
+*.log
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Editor
+*.swp
+*~
+
+# OS
+.DS_Store
