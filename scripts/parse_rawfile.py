@@ -29,18 +29,41 @@ import numpy as np
 
 
 def parse_rawfile(path: str | Path) -> dict[str, np.ndarray]:
-    """Parse an ngspice binary rawfile.
+    """Parse an ngspice binary rawfile (first plot/run).
 
     Returns a dict mapping lowercase variable names to numpy arrays.
     AC analysis produces complex arrays; DC/transient produce real-valued
     arrays (stored as complex with zero imaginary part for uniformity).
+
+    For rawfiles with multiple runs (e.g. from .step), use parse_rawfile_all().
     """
     raw = Path(path).read_bytes()
+    return _parse_single_plot(raw, 0)[0]
 
+
+def parse_rawfile_all(path: str | Path) -> list[dict[str, np.ndarray]]:
+    """Parse all runs/plots from a multi-run rawfile (e.g. .step param sweeps).
+
+    Returns a list of dicts, one per run. Single-run rawfiles return a 1-element list.
+    """
+    raw = Path(path).read_bytes()
+    results = []
+    offset = 0
+    while offset < len(raw):
+        data, next_offset = _parse_single_plot(raw, offset)
+        results.append(data)
+        if next_offset <= offset:
+            break
+        offset = next_offset
+    return results
+
+
+def _parse_single_plot(raw: bytes, start: int) -> tuple[dict[str, np.ndarray], int]:
+    """Parse one plot from raw bytes starting at `start`. Returns (data, next_offset)."""
     marker = b"Binary:\n"
-    idx = raw.index(marker)
-    header = raw[: idx + len(marker)].decode(errors="replace")
-    data = raw[idx + len(marker) :]
+    idx = raw.index(marker, start)
+    header = raw[start : idx + len(marker)].decode(errors="replace")
+    bin_start = idx + len(marker)
 
     n_vars: int | None = None
     n_pts: int | None = None
@@ -69,22 +92,22 @@ def parse_rawfile(path: str | Path) -> dict[str, np.ndarray]:
     assert len(varnames) == n_vars, f"Expected {n_vars} vars, found {len(varnames)}"
 
     values = np.zeros((n_vars, n_pts), dtype=complex)
-    offset = 0
+    offset = bin_start
 
     if is_complex:
         for i in range(n_pts):
             for v in range(n_vars):
-                re, im = struct.unpack_from("dd", data, offset)
+                re, im = struct.unpack_from("dd", raw, offset)
                 values[v, i] = complex(re, im)
                 offset += 16
     else:
         for i in range(n_pts):
             for v in range(n_vars):
-                (val,) = struct.unpack_from("d", data, offset)
+                (val,) = struct.unpack_from("d", raw, offset)
                 values[v, i] = complex(val, 0)
                 offset += 8
 
-    return {name: values[i] for i, name in enumerate(varnames)}
+    return {name: values[i] for i, name in enumerate(varnames)}, offset
 
 
 def parse_rawfile_header(path: str | Path) -> dict:
@@ -145,27 +168,35 @@ def _dump_json(path: str) -> None:
     print()
 
 
-def _dump_csv(path: str) -> None:
+def dump_csv(path: str) -> str:
+    """Return CSV content as a string from a rawfile."""
     data = parse_rawfile(path)
     names = list(data.keys())
     is_complex = any(np.any(data[n].imag != 0) for n in names)
+    lines: list[str] = []
 
     if is_complex:
         header_parts = []
         for n in names:
             header_parts.extend([f"{n}_re", f"{n}_im"])
-        print(",".join(header_parts))
+        lines.append(",".join(header_parts))
         n_pts = len(data[names[0]])
         for i in range(n_pts):
             row = []
             for n in names:
                 row.extend([f"{data[n][i].real:.10e}", f"{data[n][i].imag:.10e}"])
-            print(",".join(row))
+            lines.append(",".join(row))
     else:
-        print(",".join(names))
+        lines.append(",".join(names))
         n_pts = len(data[names[0]])
         for i in range(n_pts):
-            print(",".join(f"{data[n][i].real:.10e}" for n in names))
+            lines.append(",".join(f"{data[n][i].real:.10e}" for n in names))
+
+    return "\n".join(lines) + "\n"
+
+
+# Keep old name as alias for backward compatibility
+_dump_csv = dump_csv
 
 
 def main() -> None:
@@ -178,7 +209,7 @@ def main() -> None:
     if args.json:
         _dump_json(args.rawfile)
     elif args.csv:
-        _dump_csv(args.rawfile)
+        print(dump_csv(args.rawfile), end="")
     else:
         _print_summary(args.rawfile)
 

@@ -23,6 +23,8 @@ As a library:
 from __future__ import annotations
 
 import argparse
+import re
+import shutil
 import subprocess
 import tempfile
 from dataclasses import dataclass, field
@@ -33,7 +35,7 @@ import numpy as np
 # Import the rawfile parser from the same directory
 import sys
 sys.path.insert(0, str(Path(__file__).parent))
-from parse_rawfile import parse_rawfile, parse_rawfile_header
+from parse_rawfile import parse_rawfile, parse_rawfile_header, dump_csv
 
 
 @dataclass
@@ -58,9 +60,9 @@ class SimResult:
         return "transient" in pn or "tran" in pn
 
     @property
-    def is_dc(self) -> bool:
+    def is_op(self) -> bool:
         pn = self.header.get("plotname", "").lower()
-        return "dc" in pn and "ac" not in pn
+        return "operating point" in pn
 
     @property
     def sweep_var(self) -> np.ndarray:
@@ -81,6 +83,68 @@ class SimResult:
         return np.real(self.variables[node])
 
 
+def _netlist_has_meas(netlist_text: str) -> bool:
+    """Check if a netlist contains .meas/.measure directives."""
+    return bool(re.search(r'^\s*\.meas(ure)?\s', netlist_text, re.MULTILINE | re.IGNORECASE))
+
+
+def _netlist_has_control(netlist_text: str) -> bool:
+    """Check if a netlist already contains a .control block."""
+    return bool(re.search(r'^\s*\.control\b', netlist_text, re.MULTILINE | re.IGNORECASE))
+
+
+def _inject_control_block(netlist_text: str, raw_path: str) -> str:
+    """Inject a .control block before .end to run simulation and write rawfile.
+
+    This is needed when the netlist has .meas directives, because ngspice's
+    -b -r mode silently suppresses all .meas output. The .control block
+    approach runs interactively (within batch) and writes the rawfile via
+    the `write` command, allowing .meas to work.
+    """
+    raw_esc = raw_path.replace("\\", "/")
+    control = (
+        f".control\nrun\nwrite {raw_esc}\nquit\n.endc\n"
+    )
+    # Insert before the last .end
+    end_match = list(re.finditer(r'^\s*\.end\s*$', netlist_text, re.MULTILINE | re.IGNORECASE))
+    if not end_match:
+        return netlist_text + "\n" + control + ".end\n"
+    last_end = end_match[-1]
+    return netlist_text[:last_end.start()] + control + netlist_text[last_end.start():]
+
+
+_STATUS_KEYS = {
+    "doing analysis at temp", "total analysis time",
+    "total elapsed time", "total dram available",
+    "dram currently available", "maximum ngspice program size",
+    "current ngspice program size", "shared ngspice pages",
+    "text (code) pages", "stack", "library pages",
+}
+
+
+def _parse_measurements(stdout: str) -> dict[str, float]:
+    """Parse .meas results from ngspice stdout.
+
+    ngspice outputs lines like: "name  =  1.59155e+04 targ= ... trig= ..."
+    """
+    measurements: dict[str, float] = {}
+    for line in stdout.splitlines():
+        if "=" not in line or line.strip().startswith("*"):
+            continue
+        parts = line.split("=", 1)
+        if len(parts) != 2:
+            continue
+        name = parts[0].strip().lower()
+        if any(name.startswith(sk) for sk in _STATUS_KEYS):
+            continue
+        try:
+            val = float(parts[1].strip().split()[0])
+            measurements[name] = val
+        except (ValueError, IndexError):
+            pass
+    return measurements
+
+
 def simulate(
     netlist: str | Path,
     *,
@@ -96,7 +160,16 @@ def simulate(
 
     Returns:
         SimResult with parsed data, stdout, stderr, measurements.
+
+    Raises:
+        FileNotFoundError: If ngspice is not installed / not on PATH.
     """
+    if shutil.which("ngspice") is None:
+        raise FileNotFoundError(
+            "ngspice not found on PATH. Install it from "
+            "https://ngspice.sourceforge.io/ and ensure it's in your PATH."
+        )
+
     # Handle string netlist
     cleanup_cir = False
     if isinstance(netlist, str) and not Path(netlist).exists():
@@ -111,8 +184,25 @@ def simulate(
         cir_path = str(netlist)
 
     raw_path = cir_path.rsplit(".", 1)[0] + ".raw"
+    netlist_text = Path(cir_path).read_text()
+    has_meas = _netlist_has_meas(netlist_text)
 
-    cmd = ["ngspice", "-b", "-r", raw_path, cir_path]
+    if has_meas and not _netlist_has_control(netlist_text):
+        # ngspice -b -r silently suppresses .meas output.
+        # Inject a .control block that runs the sim and writes the rawfile,
+        # so .meas results appear on stdout AND we get a rawfile.
+        injected = _inject_control_block(netlist_text, raw_path)
+        inj_tmp = tempfile.NamedTemporaryFile(
+            mode="w", suffix=".cir", delete=False
+        )
+        inj_tmp.write(injected)
+        inj_tmp.close()
+        cmd = ["ngspice", "-b", inj_tmp.name]
+        cleanup_inj = True
+    else:
+        cmd = ["ngspice", "-b", "-r", raw_path, cir_path]
+        cleanup_inj = False
+
     if extra_flags:
         cmd.extend(extra_flags)
 
@@ -120,32 +210,11 @@ def simulate(
         cmd, capture_output=True, text=True, timeout=timeout
     )
 
+    if cleanup_inj:
+        Path(inj_tmp.name).unlink(missing_ok=True)
+
     # Parse .meas results from stdout
-    # ngspice outputs: "name               =  1.59155e+04" for .meas directives
-    measurements: dict[str, float] = {}
-    # Known ngspice status keys to ignore
-    _STATUS_KEYS = {
-        "doing analysis at temp", "total analysis time",
-        "total elapsed time", "total dram available",
-        "dram currently available", "maximum ngspice program size",
-        "current ngspice program size", "shared ngspice pages",
-        "text (code) pages", "stack", "library pages",
-    }
-    for line in proc.stdout.splitlines():
-        if "=" not in line or line.strip().startswith("*"):
-            continue
-        parts = line.split("=", 1)
-        if len(parts) != 2:
-            continue
-        name = parts[0].strip().lower()
-        # Skip ngspice status/diagnostic lines
-        if any(name.startswith(sk) for sk in _STATUS_KEYS):
-            continue
-        try:
-            val = float(parts[1].strip().split()[0])
-            measurements[name] = val
-        except (ValueError, IndexError):
-            pass
+    measurements = _parse_measurements(proc.stdout)
 
     # Parse rawfile
     variables: dict[str, np.ndarray] = {}
@@ -288,6 +357,17 @@ def main() -> None:
     print(f"Analysis: {result.header.get('plotname', '?')}")
     print(f"Points:   {result.header.get('n_pts', '?')}")
     print(f"Variables: {', '.join(result.variables.keys())}")
+
+    # .op: print operating point table
+    if result.is_op:
+        print("\nOperating Point:")
+        for name, arr in result.variables.items():
+            val = np.real(arr[0])
+            if abs(val) < 1e-3 and val != 0:
+                print(f"  {name:<20s} = {val:.6e}")
+            else:
+                print(f"  {name:<20s} = {val:.6f}")
+
     if result.measurements:
         print("\nMeasurements:")
         for name, val in result.measurements.items():
@@ -304,14 +384,7 @@ def main() -> None:
 
     # CSV export
     if args.csv:
-        from parse_rawfile import _dump_csv
-        # Re-use CSV dumper on the raw file
-        import io
-        old_stdout = sys.stdout
-        sys.stdout = buf = io.StringIO()
-        _dump_csv(result.raw_path)
-        sys.stdout = old_stdout
-        Path(args.csv).write_text(buf.getvalue())
+        Path(args.csv).write_text(dump_csv(result.raw_path))
         print(f"Saved {args.csv}")
 
     # Cleanup raw file

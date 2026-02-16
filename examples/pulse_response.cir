@@ -1,0 +1,12 @@
+RC Pulse Response with Measurements
+* Demonstrates: transient analysis, PULSE source, .meas, UIC
+* RC time constant: tau = R1*C1 = 1k * 10n = 10 us
+Vpulse in 0 PULSE(0 5 1u 10n 10n 50u 100u)
+R1 in out 1k
+C1 out 0 10n ic=0
+.tran 10n 200u UIC
+.meas tran rise_time TRIG v(out) VAL=0.5 RISE=1 TARG v(out) VAL=4.5 RISE=1
+.meas tran fall_time TRIG v(out) VAL=4.5 FALL=1 TARG v(out) VAL=0.5 FALL=1
+.meas tran peak_v MAX v(out)
+.meas tran v_at_tau FIND v(out) AT=11u
+.end

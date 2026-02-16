@@ -9,7 +9,7 @@ publication-quality plots.
 
 | File | Purpose |
 |------|---------|
-| `SKILL.md` | Main skill file — netlist syntax, analysis patterns, rawfile parsing, Monte Carlo, temperature sweeps, plotting |
+| `SKILL.md` | Main skill file — netlist syntax, analysis patterns, rawfile parsing, Monte Carlo, plotting, visualization |
 | `scripts/parse_rawfile.py` | Standalone binary rawfile parser (CLI + library) |
 | `scripts/run_sim.py` | End-to-end sim runner: netlist → rawfile → numpy arrays → plots |
 
@@ -17,15 +17,21 @@ publication-quality plots.
 
 ### GitHub Copilot / VS Code
 
-Copy the skill into your project:
+Clone and copy the skill:
+
+```bash
+git clone https://github.com/faisal-shah/ngspice-skill.git
+```
+
+Then install into your project or user-level skills:
 
 ```bash
 # Option 1: project-level
 mkdir -p .github/skills
-cp -r /path/to/ngspice-skill .github/skills/ngspice
+cp -r ngspice-skill .github/skills/ngspice
 
 # Option 2: user-level (all projects)
-cp -r /path/to/ngspice-skill ~/.copilot/skills/ngspice
+cp -r ngspice-skill ~/.copilot/skills/ngspice
 ```
 
 ### Claude Code
@@ -44,6 +50,7 @@ cp -r /path/to/ngspice-skill ~/.codex/skills/ngspice
 
 - **ngspice** installed and on PATH ([ngspice.sourceforge.io](https://ngspice.sourceforge.io/))
 - **Python 3.10+** with `numpy` and `matplotlib`
+- **schemdraw** + **pillow** for circuit visualization (optional)
 - **uv** recommended for running scripts (`uv run scripts/run_sim.py`)
 
 ## Quick Start
@@ -61,13 +68,16 @@ uv run scripts/parse_rawfile.py output.raw --json > data.json
 ## What the Skill Covers
 
 1. **Netlist syntax** — SPICE3 format, components, subcircuits, models, parameters
-2. **Analysis types** — `.ac`, `.dc`, `.tran`, `.op`, `.step`, `.meas`
-3. **Binary rawfile parsing** — struct-level unpacking of ngspice's native format
-4. **Monte Carlo analysis** — Python-driven tolerance sweeps (R±5%, C±10%, L±5%)
-5. **Temperature sweeps** — Manual TC application for passives + `.step temp` for semiconductors
-6. **Measurement extraction** — `.meas` directives + stdout parsing
-7. **Plotting** — Bode plots, transient plots, MC overlays, temperature colormaps
-8. **Common pitfalls** — Convergence, node naming, value suffixes, gotchas
+2. **Initial conditions & UIC** — `ic=` on components, `.tran UIC`, when and why to use it
+3. **Analysis types** — `.ac`, `.dc`, `.tran`, `.op`, `.step`, `.meas`
+4. **Binary rawfile parsing** — struct-level unpacking of ngspice's native format
+5. **Monte Carlo analysis** — Python-driven tolerance sweeps with component tolerance tables
+6. **Temperature sweeps** — Manual TC application for passives + `.step temp` for semiconductors
+7. **Measurement extraction** — `.meas` directives + stdout parsing
+8. **Plotting** — Bode plots, transient waveforms
+9. **Quick reference** — Common elements (switches, coupled inductors, behavioral sources), source functions (PULSE, SIN, EXP, PWL)
+10. **Common pitfalls** — Convergence, node naming, value suffixes, UIC gotchas
+11. **Circuit visualization** — schemdraw for quick PNGs, KiCad export for interactive editing
 
 ## Compatible Agents
 

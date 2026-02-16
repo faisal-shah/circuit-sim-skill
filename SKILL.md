@@ -27,8 +27,8 @@ Title Line (REQUIRED — first line is always the title, never a command)
 
 * === Component Syntax ===
 * Resistor:    Rname node+ node- value
-* Capacitor:   Cname node+ node- value
-* Inductor:    Lname node+ node- value
+* Capacitor:   Cname node+ node- value [ic=voltage]
+* Inductor:    Lname node+ node- value [ic=current]
 * Diode:       Dname anode cathode modelname
 * BJT:         Qname collector base emitter modelname
 * MOSFET:      Mname drain gate source bulk modelname W=w L=l
@@ -55,7 +55,7 @@ Title Line (REQUIRED — first line is always the title, never a command)
 .op                              * DC operating point
 .dc Vin 0 5 0.1                  * DC sweep: source start stop step
 .ac dec 100 1 1e6                * AC sweep: dec/oct/lin Npts fstart fstop
-.tran 1u 10m                     * Transient: step stop [start [max_step]]
+.tran 1u 10m                     * Transient: step stop [start [max_step]] [UIC]
 .step param Rval 50 200 50       * Parameter sweep
 
 * === Measurements ===
@@ -97,6 +97,11 @@ ngspice -b -r output.raw circuit.cir
 | `-r output.raw` | Write binary rawfile (preferred over text) |
 | `-o logfile.log` | Redirect stdout/stderr to log |
 
+**⚠️ `-b -r` suppresses `.meas` results.** ngspice silently discards all `.meas`
+output when `-r` is used. If the netlist contains `.meas` directives, either:
+1. Use `scripts/run_sim.py` which handles this automatically (injects a `.control` block)
+2. Or manually: drop `-r` and use a `.control` block with `run` + `write output.raw`
+
 The `-r` flag writes ALL node voltages and branch currents to the rawfile
 automatically — no `.save` or `.write` needed for basic usage.
 
@@ -108,82 +113,60 @@ To reduce rawfile size, specify which signals to save:
 .save v(out) v(in) i(Vpower)
 ```
 
+### Initial Conditions and UIC
+
+**This is a critical gotcha.** The `UIC` (Use Initial Conditions) flag on `.tran`
+controls whether ngspice uses `ic=` values set on capacitors and inductors.
+
+```spice
+* Pre-charged capacitor and inductor with initial current
+Cp node+ node- 12u ic=15000
+Lp node+ node- 6u ic=0.5
+.tran 1u 10m UIC
+```
+
+**Without `UIC`** (the default): ngspice computes a DC operating point at t=0
+before starting the transient. In the DC operating point, capacitors are open
+circuits and inductors are short circuits, so the solver finds the steady-state
+DC solution. All `ic=` values on components are **silently ignored**. This
+typically produces all-zero waveforms for circuits that depend on stored energy.
+
+**With `UIC`**: ngspice skips the DC operating point entirely and initializes
+component voltages/currents directly from `ic=` values at t=0. This is essential
+for:
+- Pre-charged capacitors (energy storage, pulsed power)
+- Oscillator startup from a known state
+- Any circuit where the initial stored energy drives the behavior
+
+**`ic=` vs `.ic`** — these are different mechanisms:
+- `Cname n+ n- value ic=V` — component-level, **only honored with `UIC`**
+- `.ic V(node)=value` — node-level, applied as constraints **after** DC OP
+  (does NOT require `UIC`, but behaves differently)
+
+| Symptom | Likely cause | Fix |
+|---------|-------------|-----|
+| All-zero waveforms despite `ic=` on caps | `.tran` missing `UIC` | Add `UIC` to `.tran` line |
+| Capacitor starts at 0V not expected voltage | DC OP overrides `ic=` | Add `UIC` to `.tran` line |
+
 ---
 
 ## 3. Parsing Binary Rawfiles (Python)
 
-The rawfile is the **primary data exchange format**. Use the helper script
-at `scripts/parse_rawfile.py` or inline this pattern:
+The rawfile is the **primary data exchange format**. Use `scripts/parse_rawfile.py`:
 
 ```python
-import struct
-import numpy as np
-from pathlib import Path
+from parse_rawfile import parse_rawfile, parse_rawfile_all
 
-def parse_rawfile(path: str | Path) -> dict[str, np.ndarray]:
-    """Parse ngspice binary rawfile → dict of variable_name → complex array.
+data = parse_rawfile("output.raw")
+# Returns dict: variable_name → numpy array (complex for AC, real-as-complex for DC/tran)
 
-    For AC analysis: values are complex (magnitude + phase).
-    For DC/transient: values are real (imaginary part is zero).
-    """
-    raw = Path(path).read_bytes()
-
-    # Split header (ASCII) from binary data
-    marker = b"Binary:\n"
-    hdr_end = raw.index(marker) + len(marker)
-    header = raw[:hdr_end].decode(errors="replace")
-    data = raw[hdr_end:]
-
-    # Parse header fields
-    n_vars = n_pts = None
-    varnames: list[str] = []
-    is_complex = False
-    in_vars = False
-
-    for line in header.splitlines():
-        if line.startswith("No. Variables:"):
-            n_vars = int(line.split(":", 1)[1])
-        elif line.startswith("No. Points:"):
-            n_pts = int(line.split(":", 1)[1])
-        elif line.startswith("Flags:") and "complex" in line.lower():
-            is_complex = True
-        elif line.startswith("Variables:"):
-            in_vars = True
-        elif in_vars:
-            parts = line.strip().split()
-            if len(parts) >= 2 and parts[0].isdigit():
-                varnames.append(parts[1].lower())
-            if len(varnames) == n_vars:
-                in_vars = False
-
-    # Unpack binary data
-    # AC analysis: each value is 2 doubles (real, imag) = 16 bytes
-    # DC/tran: each value is 1 double = 8 bytes
-    # Exception: the sweep variable (first) is always real in DC/tran,
-    # but in AC analysis it's stored as complex too.
-    if is_complex:
-        # All variables stored as complex (2 × float64)
-        values = np.zeros((n_vars, n_pts), dtype=complex)
-        offset = 0
-        for i in range(n_pts):
-            for v in range(n_vars):
-                re, im = struct.unpack_from("dd", data, offset)
-                values[v, i] = complex(re, im)
-                offset += 16
-    else:
-        # All variables stored as real (1 × float64)
-        # Exception: first variable (time/sweep) is float64,
-        # remaining are also float64
-        values = np.zeros((n_vars, n_pts), dtype=complex)
-        offset = 0
-        for i in range(n_pts):
-            for v in range(n_vars):
-                val, = struct.unpack_from("d", data, offset)
-                values[v, i] = complex(val, 0)
-                offset += 8
-
-    return {name: values[i] for i, name in enumerate(varnames)}
+# For multi-run rawfiles (.step param sweeps, multiple analyses):
+runs = parse_rawfile_all("output.raw")  # list of dicts, one per run
 ```
+
+**Format overview:** ASCII header (title, variable names, flags) → `Binary:\n` marker →
+packed little-endian float64s. AC data is stored as complex pairs (16 bytes/value);
+DC/transient as real (8 bytes/value). The parser handles both automatically.
 
 ### Usage
 
@@ -193,7 +176,13 @@ freq = np.real(data["frequency"])       # AC sweep variable
 vout = data["v(out)"]                   # Complex for AC
 mag_dB = 20 * np.log10(np.abs(vout))
 phase_deg = np.degrees(np.angle(vout))
+
+# Transient
+time = np.real(data["time"])
+v_out = np.real(data["v(out)"])         # Real for transient
 ```
+
+CLI: `uv run scripts/parse_rawfile.py output.raw [--json | --csv]`
 
 ---
 
@@ -278,47 +267,16 @@ contains `n_runs × n_pts` points sequentially.
 
 ## 5. Monte Carlo / Tolerance Analysis
 
-ngspice does not have a built-in Monte Carlo command. Use Python to randomize
-component values and run multiple simulations:
+ngspice has no built-in Monte Carlo. Use Python to randomize and loop:
 
 ```python
-import subprocess, tempfile, numpy as np
-from pathlib import Path
-
 rng = np.random.default_rng(42)
-
-def make_netlist(r, c, l) -> str:
-    return f"""Filter MC Run
-Vin in 0 AC 1
-L1 in mid {l:.10e}
-C1 mid out {c:.10e}
-R1 out 0 {r:.6e}
-.ac dec 100 100 1e6
-.end
-"""
-
-# Tolerances: R ±5%, C ±10%, L ±5%
-R_NOM, C_NOM, L_NOM = 100, 253e-9, 1e-3
-
-results = []
 for i in range(200):
-    r = R_NOM * (1 + rng.uniform(-0.05, 0.05))
-    c = C_NOM * (1 + rng.uniform(-0.10, 0.10))
-    l = L_NOM * (1 + rng.uniform(-0.05, 0.05))
-
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".cir", delete=False) as f:
-        f.write(make_netlist(r, c, l))
-        cir_path = f.name
-    raw_path = cir_path.replace(".cir", ".raw")
-
-    subprocess.run(
-        ["ngspice", "-b", "-r", raw_path, cir_path],
-        capture_output=True, timeout=30,
-    )
-    data = parse_rawfile(raw_path)
-    results.append(data)
-    Path(cir_path).unlink()
-    Path(raw_path).unlink()
+    r = R_NOM * (1 + rng.uniform(-0.05, 0.05))    # ±5%
+    c = C_NOM * (1 + rng.uniform(-0.10, 0.10))    # ±10%
+    netlist = make_netlist(r, c)  # generate netlist string with adjusted values
+    result = simulate(netlist)    # run ngspice, parse rawfile (see scripts/run_sim.py)
+    results.append(result)
 ```
 
 ### Typical Component Tolerances
@@ -336,32 +294,20 @@ for i in range(200):
 
 ## 6. Temperature Sweep
 
-Apply temperature coefficients manually in Python (ngspice's `.temp` only
-affects semiconductor models, not passive RLC):
+ngspice's `.temp` only affects semiconductor models, not passive RLC. For passives,
+apply temperature coefficients manually: `R(T) = R_nom × (1 + TC × (T - 25))`.
 
-```python
-# Temperature coefficients (ppm/°C relative to 25°C)
-R_TC  =  100e-6   # metal film resistor
-C_TC  = -200e-6   # film capacitor
-L_TC  = -400e-6   # ferrite inductor
-T_REF = 25.0
+| Component | TC (ppm/°C) | Notes |
+|-----------|-------------|-------|
+| Metal film resistor | +100 | Most stable |
+| Film capacitor | -200 | C0G/NP0: ±30 |
+| Ferrite inductor | -400 to -800 | Core dependent |
 
-def apply_temp(nominal, tc, temp):
-    return nominal * (1 + tc * (temp - T_REF))
-
-for temp in [-40, -20, 0, 25, 50, 85, 125, 150]:
-    r = apply_temp(R_NOM, R_TC, temp)
-    c = apply_temp(C_NOM, C_TC, temp)
-    l = apply_temp(L_NOM, L_TC, temp)
-    # ... run simulation with adjusted values ...
-```
-
-For semiconductor temperature effects, use ngspice's built-in `.temp`:
+For semiconductors, use ngspice's built-in sweep:
 
 ```spice
 .temp 25
-* or sweep with:
-.step temp -40 150 10
+.step temp -40 150 10    * sweep temperature
 ```
 
 ---
@@ -422,33 +368,55 @@ fig.tight_layout()
 fig.savefig("bode.png", dpi=150, bbox_inches="tight")
 ```
 
-### Monte Carlo Overlay
+---
 
-```python
-for freq, mag in mc_curves:
-    ax.semilogx(freq, mag, color="#1f77b4", alpha=0.05, linewidth=0.5)
+## 9. ngspice Quick Reference
 
-# Statistics
-all_mags = np.array([m for _, m in mc_curves])
-ax.semilogx(freq_ref, np.mean(all_mags, axis=0), "k-", lw=2, label="Mean")
-ax.fill_between(freq_ref,
-    np.percentile(all_mags, 5, axis=0),
-    np.percentile(all_mags, 95, axis=0),
-    alpha=0.2, label="5th–95th %ile")
+Common elements beyond R/L/C that the AI may need:
+
+| Element | Syntax | Notes |
+|---------|--------|-------|
+| Coupled inductors | `Kname L1 L2 coupling` | k=0 to 1; define both L elements first |
+| V-controlled switch | `Sname n+ n- ctrl+ ctrl- model` | `.model name SW(VT=0 VH=0.1 RON=1 ROFF=1e6)` |
+| I-controlled switch | `Wname n+ n- Vctrl model` | `.model name CSW(IT=0 IH=0.1 RON=1 ROFF=1e6)` |
+| Behavioral source | `Bname n+ n- V={expr}` | or `I={expr}`; any math on node voltages |
+| Ideal transformer | Two `L` + `K` statement | No standalone transformer element |
+| VCVS | `Ename out+ out- ctrl+ ctrl- gain` | Ideal voltage amplifier |
+| CCCS | `Fname out+ out- Vsense gain` | Current controlled by current through Vsense |
+| Diode | `Dname anode cathode model` | `.model name D(IS=1e-14 BV=100)` |
+| Transmission line | `Tname p1+ p1- p2+ p2- Z0=50 TD=1n` | Lossless |
+
+**V-controlled switch polarity tip**: the switch closes when `V(ctrl+) - V(ctrl-) > VT`.
+For negative output voltages, swap control nodes so the difference is positive.
+
+Full syntax reference: https://ngspice.sourceforge.io/docs/ngspice-manual.pdf
+
+### Transient Source Functions
+
+These are used with `V` or `I` sources. Getting parameter order wrong causes **silent** errors.
+
+```
+PULSE(V1 V2 Td Tr Tf PW PER)
+  V1=initial, V2=pulsed, Td=delay, Tr=rise, Tf=fall, PW=width, PER=period
+
+SIN(Voff Vamp Freq Td Theta Phase)
+  Damped sine: V = Voff + Vamp × sin(2π·Freq·t + Phase) × exp(-Theta·t)
+
+EXP(V1 V2 Td1 Tau1 Td2 Tau2)
+  Exponential rise from V1 to V2, then fall
+
+PWL(t1 v1 t2 v2 ...)
+  Piecewise linear — arbitrary waveform defined point by point
 ```
 
-### Temperature Sweep with Colormap
-
-```python
-cmap = plt.cm.coolwarm
-for temp, freq, mag in temp_curves:
-    color = cmap((temp - T_MIN) / (T_MAX - T_MIN))
-    ax.semilogx(freq, mag, color=color, label=f"{temp}°C")
+Example: 15 kV pulse with 100 ns rise/fall, 10 µs width, 1 ms period:
+```spice
+Vpulse in 0 PULSE(0 15000 0 100n 100n 10u 1m)
 ```
 
 ---
 
-## 9. Common Pitfalls
+## 10. Common Pitfalls
 
 | Problem | Cause | Fix |
 |---------|-------|-----|
@@ -459,6 +427,8 @@ for temp, freq, mag in temp_curves:
 | `M` means milli not mega | SPICE convention | Use `MEG` for 1e6 |
 | Rawfile parse garbage | Text mode vs binary | Always use `-r` flag for binary |
 | AC gain > 0 dB for passives | Phase/complex issue | Check `np.abs()` not `.real` |
+| `.meas` results missing | `-b -r` suppresses `.meas` | Use `.control` block with `run` + `write` instead of `-r` |
+| `ic=` ignored, all zeros | `.tran` without `UIC` | Add `UIC` to `.tran` line |
 
 ### Convergence Helpers
 
@@ -473,49 +443,57 @@ for temp, freq, mag in temp_curves:
 
 ---
 
-## 10. Script Templates
+## 11. Helper Scripts
 
-### PEP 723 Standalone Simulation Script
+See `scripts/run_sim.py` for a complete PEP 723 simulation runner with CLI,
+Bode/transient plots, CSV export, and `.meas` parsing. Usage:
 
-```python
-# /// script
-# requires-python = ">=3.10"
-# dependencies = ["numpy", "matplotlib"]
-# ///
-"""Run an ngspice simulation and plot results. Usage: uv run sim.py"""
-
-import subprocess, struct, tempfile
-import numpy as np
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-from pathlib import Path
-
-NETLIST = """Title Goes Here
-Vin in 0 AC 1
-R1 in out 1k
-C1 out 0 1n
-.ac dec 100 1 100MEG
-.end
-"""
-
-# Run simulation
-with tempfile.NamedTemporaryFile(mode="w", suffix=".cir", delete=False) as f:
-    f.write(NETLIST)
-    cir = f.name
-raw = cir.replace(".cir", ".raw")
-subprocess.run(["ngspice", "-b", "-r", raw, cir], capture_output=True)
-
-# Parse rawfile (use scripts/parse_rawfile.py for production code)
-# ... (see Section 3) ...
-
-# Plot
-# ... (see Section 8) ...
-
-# Cleanup
-Path(cir).unlink()
-Path(raw).unlink()
+```bash
+uv run scripts/run_sim.py circuit.cir --plot bode.png
 ```
 
-See `scripts/parse_rawfile.py` and `scripts/run_sim.py` for ready-to-use
-helper modules.
+---
+
+## 12. Circuit Visualization
+
+### schemdraw — Quick Inline Schematics
+
+Use `schemdraw` for programmatic circuit diagrams (PNG or SVG output).
+PEP 723 deps: `schemdraw`, `matplotlib`, `pillow`.
+
+```python
+import schemdraw
+import schemdraw.elements as elm
+
+with schemdraw.Drawing() as d:
+    d += elm.SourceV().label("Vin").up()
+    d += elm.Resistor().right().label("R1")
+    d += elm.Capacitor().down().label("C1")
+    d += elm.Line().left()
+    d.save("circuit.png", dpi=150)
+```
+
+**Key gotchas learned from experience:**
+- **Transparent background**: schemdraw renders RGBA by default. Composite onto
+  white with PIL: `Image.alpha_composite(white_bg, img).save("out.png")`
+- **Cursor movement**: `elm.Annotate().at(pos)` moves the drawing cursor. Always
+  place `elm.Ground()` with explicit `.at(component.end)` to avoid misconnection.
+- **Label overlap on vertical components**: `loc='left'` on vertical inductors/caps
+  still overlaps the component body. Use standalone `elm.Annotate()` with explicit
+  `(x, y)` coordinates offset 1.3–1.8 units from the component.
+- **Title placement**: Render circuit first, then add title via matplotlib
+  `fig.suptitle()` to avoid excessive whitespace.
+
+### KiCad Export — Interactive Editing
+
+For schematics that need iterative refinement or production documentation, export
+to KiCad format instead of regenerating PNGs each time:
+
+- `kicad-sch-api` package generates `.kicad_sch` files (KiCad 8 compatible)
+- Workflow: parse SPICE netlist → map components to KiCad library symbols
+  (e.g., `R` → `Device:R`, `C` → `Device:C`) → auto-place on grid → open in KiCad
+- No direct SPICE→KiCad converter exists; requires custom mapping code
+- `pip install kicad-sch-api` (or `uv pip install`)
+
+This is preferred when the schematic will be revised multiple times or needs to be
+included in formal documentation.
