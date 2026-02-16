@@ -35,7 +35,7 @@ import numpy as np
 # Import the rawfile parser from the same directory
 import sys
 sys.path.insert(0, str(Path(__file__).parent))
-from parse_rawfile import parse_rawfile, parse_rawfile_header, dump_csv
+from parse_rawfile import parse_rawfile, parse_rawfile_all, parse_rawfile_header, dump_csv
 
 
 @dataclass
@@ -49,6 +49,7 @@ class SimResult:
     stderr: str = ""
     returncode: int = 0
     measurements: dict[str, float] = field(default_factory=dict)
+    all_runs: list[dict[str, np.ndarray]] = field(default_factory=list)
 
     @property
     def is_ac(self) -> bool:
@@ -88,9 +89,86 @@ def _netlist_has_meas(netlist_text: str) -> bool:
     return bool(re.search(r'^\s*\.meas(ure)?\s', netlist_text, re.MULTILINE | re.IGNORECASE))
 
 
+def _netlist_has_step(netlist_text: str) -> bool:
+    """Check if a netlist contains a .step directive."""
+    return bool(re.search(r'^\s*\.step\s', netlist_text, re.MULTILINE | re.IGNORECASE))
+
+
+_SPICE_SUFFIXES = {
+    "t": 1e12, "g": 1e9, "meg": 1e6, "k": 1e3,
+    "m": 1e-3, "u": 1e-6, "n": 1e-9, "p": 1e-12, "f": 1e-15,
+}
+
+
+def _spice_float(s: str) -> float:
+    """Parse a SPICE numeric literal (e.g. '1k', '10n', '2.5MEG')."""
+    s = s.strip().lower()
+    for suf, mult in sorted(_SPICE_SUFFIXES.items(), key=lambda x: -len(x[0])):
+        if s.endswith(suf):
+            return float(s[: -len(suf)]) * mult
+    return float(s)
+
+
+def _parse_step_directive(netlist_text: str) -> tuple[str, list[float]] | None:
+    """Parse '.step param <name> <start> <stop> <incr>' and return (name, values)."""
+    m = re.search(
+        r'^\s*\.step\s+param\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)',
+        netlist_text, re.MULTILINE | re.IGNORECASE,
+    )
+    if not m:
+        return None
+    name = m.group(1)
+    start, stop, incr = _spice_float(m.group(2)), _spice_float(m.group(3)), _spice_float(m.group(4))
+    vals: list[float] = []
+    v = start
+    while v <= stop * (1 + 1e-9):
+        vals.append(v)
+        v += incr
+    return name, vals
+
+
+def _inject_step_control_block(netlist_text: str, raw_path: str) -> str:
+    """Replace .step directive with a .control foreach loop that writes a multi-run rawfile."""
+    parsed = _parse_step_directive(netlist_text)
+    if parsed is None:
+        return netlist_text
+    param_name, values = parsed
+    raw_esc = raw_path.replace("\\", "/")
+    val_str = " ".join(f"{v:g}" for v in values)
+    control = (
+        f".control\nset appendwrite\n"
+        f"foreach __val {val_str}\n"
+        f"  alterparam {param_name} = $__val\n"
+        f"  reset\n  run\n  write {raw_esc}\nend\nquit\n.endc\n"
+    )
+    # Remove the .step line
+    text = re.sub(r'^\s*\.step\s.*$', '', netlist_text, count=1, flags=re.MULTILINE | re.IGNORECASE)
+    # Insert control block before .end
+    end_match = list(re.finditer(r'^\s*\.end\s*$', text, re.MULTILINE | re.IGNORECASE))
+    if not end_match:
+        return text + "\n" + control + ".end\n"
+    last_end = end_match[-1]
+    return text[:last_end.start()] + control + text[last_end.start():]
+
+
 def _netlist_has_control(netlist_text: str) -> bool:
     """Check if a netlist already contains a .control block."""
     return bool(re.search(r'^\s*\.control\b', netlist_text, re.MULTILINE | re.IGNORECASE))
+
+
+def _check_uic_warning(netlist_text: str) -> str | None:
+    """Warn if ic= values exist on components but .tran is missing UIC."""
+    has_ic = bool(re.search(r'^[a-zA-Z]\S*\s+.*\bic=', netlist_text, re.MULTILINE | re.IGNORECASE))
+    if not has_ic:
+        return None
+    tran_match = re.search(r'^\s*\.tran\b(.*)$', netlist_text, re.MULTILINE | re.IGNORECASE)
+    if tran_match and not re.search(r'\bUIC\b', tran_match.group(1), re.IGNORECASE):
+        return (
+            "Netlist has ic= values on components but .tran is missing UIC flag.\n"
+            "Without UIC, ngspice computes a DC operating point first, silently ignoring all ic= values.\n"
+            "Add 'UIC' to the .tran line if initial conditions should be used."
+        )
+    return None
 
 
 def _inject_control_block(netlist_text: str, raw_path: str) -> str:
@@ -185,13 +263,19 @@ def simulate(
 
     raw_path = cir_path.rsplit(".", 1)[0] + ".raw"
     netlist_text = Path(cir_path).read_text()
-    has_meas = _netlist_has_meas(netlist_text)
 
-    if has_meas and not _netlist_has_control(netlist_text):
-        # ngspice -b -r silently suppresses .meas output.
-        # Inject a .control block that runs the sim and writes the rawfile,
-        # so .meas results appear on stdout AND we get a rawfile.
-        injected = _inject_control_block(netlist_text, raw_path)
+    uic_warning = _check_uic_warning(netlist_text)
+    if uic_warning:
+        print(f"WARNING: {uic_warning}", file=sys.stderr)
+
+    has_meas = _netlist_has_meas(netlist_text)
+    has_step = _netlist_has_step(netlist_text)
+
+    if (has_meas or has_step) and not _netlist_has_control(netlist_text):
+        if has_step:
+            injected = _inject_step_control_block(netlist_text, raw_path)
+        else:
+            injected = _inject_control_block(netlist_text, raw_path)
         inj_tmp = tempfile.NamedTemporaryFile(
             mode="w", suffix=".cir", delete=False
         )
@@ -218,10 +302,16 @@ def simulate(
 
     # Parse rawfile
     variables: dict[str, np.ndarray] = {}
+    all_runs: list[dict[str, np.ndarray]] = []
     header: dict = {}
     if Path(raw_path).exists():
-        variables = parse_rawfile(raw_path)
         header = parse_rawfile_header(raw_path)
+        if _netlist_has_step(netlist_text):
+            all_runs = parse_rawfile_all(raw_path)
+            variables = all_runs[0] if all_runs else {}
+        else:
+            variables = parse_rawfile(raw_path)
+            all_runs = [variables]
 
     result = SimResult(
         variables=variables,
@@ -232,6 +322,7 @@ def simulate(
         stderr=proc.stderr,
         returncode=proc.returncode,
         measurements=measurements,
+        all_runs=all_runs,
     )
 
     if cleanup_cir:
@@ -264,11 +355,21 @@ def plot_bode(result: SimResult, output: str, nodes: list[str] | None = None) ->
         result.header.get("title", "Bode Plot"), fontsize=14, fontweight="bold"
     )
 
-    for node in nodes:
-        mag = result.mag_dB(node)
-        phase = result.phase_deg(node)
-        ax_mag.semilogx(freq, mag, linewidth=2, label=node)
-        ax_ph.semilogx(freq, phase, linewidth=2, label=node)
+    if len(result.all_runs) > 1:
+        for run_idx, run_vars in enumerate(result.all_runs):
+            run_freq = np.real(run_vars[list(run_vars.keys())[0]])
+            for node in nodes:
+                mag = 20 * np.log10(np.abs(run_vars[node]) + 1e-30)
+                phase = np.degrees(np.angle(run_vars[node]))
+                lbl = f"{node} run {run_idx + 1}"
+                ax_mag.semilogx(run_freq, mag, linewidth=2, alpha=0.6, label=lbl)
+                ax_ph.semilogx(run_freq, phase, linewidth=2, alpha=0.6, label=lbl)
+    else:
+        for node in nodes:
+            mag = result.mag_dB(node)
+            phase = result.phase_deg(node)
+            ax_mag.semilogx(freq, mag, linewidth=2, label=node)
+            ax_ph.semilogx(freq, phase, linewidth=2, label=node)
 
     ax_mag.axhline(-3, color="red", linestyle="--", linewidth=0.8, alpha=0.6)
     ax_mag.set_ylabel("Magnitude (dB)")
@@ -321,8 +422,16 @@ def plot_transient(
     else:
         t_scale, t_unit = 1, "s"
 
-    for node in nodes:
-        ax.plot(time * t_scale, result.real(node), linewidth=2, label=node)
+    if len(result.all_runs) > 1:
+        for run_idx, run_vars in enumerate(result.all_runs):
+            run_time = np.real(run_vars[list(run_vars.keys())[0]])
+            for node in nodes:
+                lbl = f"{node} run {run_idx + 1}"
+                ax.plot(run_time * t_scale, np.real(run_vars[node]),
+                        linewidth=2, alpha=0.6, label=lbl)
+    else:
+        for node in nodes:
+            ax.plot(time * t_scale, result.real(node), linewidth=2, label=node)
 
     ax.set_xlabel(f"Time ({t_unit})")
     ax.set_ylabel("Voltage (V)")
@@ -357,6 +466,8 @@ def main() -> None:
     print(f"Analysis: {result.header.get('plotname', '?')}")
     print(f"Points:   {result.header.get('n_pts', '?')}")
     print(f"Variables: {', '.join(result.variables.keys())}")
+    if len(result.all_runs) > 1:
+        print(f"Runs:     {len(result.all_runs)}")
 
     # .op: print operating point table
     if result.is_op:
