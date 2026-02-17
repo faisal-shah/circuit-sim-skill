@@ -1,17 +1,21 @@
 ---
-name: ngspice
+name: circuit-sim
 description: >
-  Run SPICE circuit simulations with ngspice and draw circuit schematic
-  diagrams. Covers netlist authoring, circuit visualization, AC/DC/transient
-  analysis, binary rawfile parsing, Monte Carlo tolerance analysis,
-  temperature sweeps, .meas extraction, and matplotlib plotting.
+  Run SPICE circuit simulations with ngspice. Covers netlist authoring,
+  AC/DC/transient analysis, binary rawfile parsing, Monte Carlo tolerance
+  analysis, temperature sweeps, .meas extraction, and matplotlib plotting.
+  For converting netlists to schematic diagrams, see the netlist-to-schematic
+  skill.
 ---
 
-# ngspice Circuit Simulation Skill
+# Circuit Simulation Skill
 
 Drive ngspice from the command line to simulate analog/mixed-signal circuits.
 This skill covers the full workflow: write a netlist, run batch simulation,
 parse binary output, and plot results with matplotlib.
+
+> **Schematic diagrams:** To convert a netlist into a circuit schematic, use
+> the `netlist-to-schematic` skill instead.
 
 ## Prerequisites
 
@@ -460,61 +464,12 @@ Escalation order: `method=gear` → `reltol=0.003` → `itl4=50` → relax `abst
 - `scripts/run_sim.py` — Full simulation runner with auto-handling of `.meas`,
   `.step` param sweeps, and UIC warnings. Bode/transient plots, CSV export.
 - `scripts/parse_rawfile.py` — Binary rawfile parser (single + multi-run).
-- `scripts/compile_tex.py` — Compiles Circuitikz `.tex` schematics to PNG.
 
 Usage:
 
 ```bash
 uv run scripts/run_sim.py circuit.cir --plot bode.png
-uv run scripts/compile_tex.py schematic.tex        # → schematic.png
+uv run scripts/parse_rawfile.py output.raw [--json | --csv]
 ```
 
----
 
-## 12. Circuit Visualization with Circuitikz
-
-Circuitikz (LaTeX) produces publication-quality schematics. Requires `pdflatex`
-with `circuitikz` package.
-
-### Minimal Template
-
-```latex
-\documentclass[border=10pt]{standalone}
-\usepackage[american]{circuitikz}
-\begin{document}
-\begin{circuitikz}[scale=0.85, transform shape]
-  \draw (0,0) node[ground]{}
-    to[V, l=$V_{in}$] (0,3)
-    to[R, l=$R_1$] (3,3)
-    to[C, l=$C_1$] (3,0) -- (0,0);
-\end{circuitikz}
-\end{document}
-```
-
-### Key Components
-
-| Circuitikz | SPICE | Notes |
-|-------------|-------|-------|
-| `to[R]` | R | `l=$R_1$` for label |
-| `to[C]` | C | `l=$10\;\mu\mathrm{F}$` |
-| `to[L]` / `to[cute inductor]` | L | `cute inductor` for transformer windings |
-| `to[D]` | D | Diode |
-| `to[nos]` | S (switch) | Normally-open switch |
-| `node[ground]` | node 0 | |
-
-### Gotchas
-
-- **Label overlap**: vertical component `l={...}` labels overlap the body. Use
-  `\node[left] at (x,y) {$C_1$};` with explicit coordinates instead.
-- **Transformer**: draw two `cute inductor` (one `mirror`) + parallel lines for core.
-  Add polarity dots: `\node[circle, fill, inner sep=1.3pt] at (x,y) {};`
-- **Stage boxes**: `\draw[dashed, rounded corners, gray] (x1,y1) rectangle (x2,y2);`
-
-### Compile Pipeline
-
-```bash
-pdflatex -interaction=nonstopmode schematic.tex
-pdftoppm -png -r 300 schematic.pdf schematic   # → schematic-1.png
-```
-
-Or use `scripts/compile_tex.py` which handles both steps + error reporting.

@@ -5,6 +5,9 @@ that teaches AI coding assistants how to drive **ngspice** for analog circuit
 simulation — from netlist authoring through binary rawfile parsing to
 publication-quality plots.
 
+> **Schematic diagrams:** To convert a netlist into a circuit schematic, see
+> [netlist-to-schematic-skill](https://github.com/faisal-shah/netlist-to-schematic-skill).
+
 ## What's Included
 
 | File | Required | Purpose |
@@ -12,7 +15,6 @@ publication-quality plots.
 | `SKILL.md` | **yes** | Main skill file — loaded by the agent framework |
 | `scripts/parse_rawfile.py` | **yes** | Binary rawfile parser (CLI + library) |
 | `scripts/run_sim.py` | **yes** | End-to-end sim runner with .meas/.step/UIC handling |
-| `scripts/draw_circuit.py` | **yes** | schemdraw helper with gotcha workarounds |
 | `README.md` | no | This file (repo documentation only) |
 | `AGENTS.md` | no | AI context for developing the skill itself |
 | `LICENSE` | no | MIT license text |
@@ -33,37 +35,36 @@ Then install into your project or user-level skills:
 
 ```bash
 # Option 1: project-level
-mkdir -p .github/skills/ngspice/scripts
-cp circuit-sim-skill/SKILL.md .github/skills/ngspice/
-cp circuit-sim-skill/scripts/*.py .github/skills/ngspice/scripts/
+mkdir -p .github/skills/circuit-sim/scripts
+cp circuit-sim-skill/SKILL.md .github/skills/circuit-sim/
+cp circuit-sim-skill/scripts/*.py .github/skills/circuit-sim/scripts/
 
 # Option 2: user-level (all projects)
-mkdir -p ~/.copilot/skills/ngspice/scripts
-cp circuit-sim-skill/SKILL.md ~/.copilot/skills/ngspice/
-cp circuit-sim-skill/scripts/*.py ~/.copilot/skills/ngspice/scripts/
+mkdir -p ~/.copilot/skills/circuit-sim/scripts
+cp circuit-sim-skill/SKILL.md ~/.copilot/skills/circuit-sim/
+cp circuit-sim-skill/scripts/*.py ~/.copilot/skills/circuit-sim/scripts/
 ```
 
 ### Claude Code
 
 ```bash
-mkdir -p ~/.claude/skills/ngspice/scripts
-cp circuit-sim-skill/SKILL.md ~/.claude/skills/ngspice/
-cp circuit-sim-skill/scripts/*.py ~/.claude/skills/ngspice/scripts/
+mkdir -p ~/.claude/skills/circuit-sim/scripts
+cp circuit-sim-skill/SKILL.md ~/.claude/skills/circuit-sim/
+cp circuit-sim-skill/scripts/*.py ~/.claude/skills/circuit-sim/scripts/
 ```
 
 ### OpenAI Codex
 
 ```bash
-mkdir -p ~/.codex/skills/ngspice/scripts
-cp circuit-sim-skill/SKILL.md ~/.codex/skills/ngspice/
-cp circuit-sim-skill/scripts/*.py ~/.codex/skills/ngspice/scripts/
+mkdir -p ~/.codex/skills/circuit-sim/scripts
+cp circuit-sim-skill/SKILL.md ~/.codex/skills/circuit-sim/
+cp circuit-sim-skill/scripts/*.py ~/.codex/skills/circuit-sim/scripts/
 ```
 
 ## Prerequisites
 
 - **ngspice** installed and on PATH ([ngspice.sourceforge.io](https://ngspice.sourceforge.io/))
 - **Python 3.10+** with `numpy` and `matplotlib`
-- **schemdraw** + **pillow** for circuit visualization (optional)
 - **uv** recommended for running scripts (`uv run scripts/run_sim.py`)
 
 ## Quick Start
@@ -90,7 +91,11 @@ uv run scripts/parse_rawfile.py output.raw --json > data.json
 8. **Plotting** — Bode plots, transient waveforms
 9. **Quick reference** — Common elements (switches, coupled inductors, behavioral sources), source functions (PULSE, SIN, EXP, PWL)
 10. **Common pitfalls** — Convergence, node naming, value suffixes, UIC gotchas
-11. **Circuit visualization** — schemdraw for quick PNGs, KiCad export for interactive editing
+
+## Related Skills
+
+For converting netlists into **circuit schematic diagrams**, see
+[netlist-to-schematic-skill](https://github.com/faisal-shah/netlist-to-schematic-skill).
 
 ## Compatible Agents
 

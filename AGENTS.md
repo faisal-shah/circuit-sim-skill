@@ -14,8 +14,6 @@ AI's context at session start.
 - `scripts/parse_rawfile.py` — Binary rawfile parser. Library + CLI.
 - `scripts/run_sim.py` — End-to-end simulation runner. Handles .meas, .step
   param sweeps, and UIC warnings automatically.
-- `scripts/compile_tex.py` — Compiles Circuitikz `.tex` schematics to PNG
-  via pdflatex + pdftoppm.
 - `examples/` — Reference netlists for testing.
 
 ## Known Gotchas (all handled by tooling)
@@ -34,13 +32,10 @@ AI's context at session start.
    `.control` foreach loop, and populates `result.all_runs`. Plotting
    functions overlay all runs automatically.
 
-## Schematic Approach
+## Related Skills
 
-**Use Circuitikz (LaTeX)** for circuit schematics — hand-written coordinate-based
-layout produces publication-quality output. schemdraw and auto-layout tools
-(SKiDL+netlistsvg) were evaluated and found inadequate for non-trivial circuits.
-
-`scripts/compile_tex.py` handles the pdflatex → PNG pipeline.
+For converting netlists into circuit schematic diagrams, see
+[netlist-to-schematic-skill](https://github.com/faisal-shah/netlist-to-schematic-skill).
 
 ## Testing Changes
 
