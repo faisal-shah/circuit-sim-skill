@@ -1,11 +1,10 @@
 ---
 name: circuit-sim
 description: >
-  Run SPICE circuit simulations with ngspice. Covers netlist authoring,
-  AC/DC/transient analysis, binary rawfile parsing, Monte Carlo tolerance
-  analysis, temperature sweeps, .meas extraction, and matplotlib plotting.
-  For converting netlists to schematic diagrams, see the netlist-to-schematic
-  skill.
+  Simulate a circuit, run a SPICE simulation, or analyze circuit behavior
+  (AC/DC/transient). Use when asked to simulate, plot waveforms, sweep
+  parameters, measure rise time, check frequency response, or parse
+  simulation output from a .cir/.spice netlist.
 ---
 
 # Circuit Simulation Skill
