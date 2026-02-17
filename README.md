@@ -1,4 +1,4 @@
-# ngspice-skill
+# circuit-sim-skill
 
 An [agent skill](https://docs.github.com/copilot/concepts/agents/about-agent-skills)
 that teaches AI coding assistants how to drive **ngspice** for analog circuit
@@ -26,7 +26,7 @@ publication-quality plots.
 Clone and copy only the required files:
 
 ```bash
-git clone https://github.com/faisal-shah/ngspice-skill.git
+git clone https://github.com/faisal-shah/circuit-sim-skill.git
 ```
 
 Then install into your project or user-level skills:
@@ -34,29 +34,29 @@ Then install into your project or user-level skills:
 ```bash
 # Option 1: project-level
 mkdir -p .github/skills/ngspice/scripts
-cp ngspice-skill/SKILL.md .github/skills/ngspice/
-cp ngspice-skill/scripts/*.py .github/skills/ngspice/scripts/
+cp circuit-sim-skill/SKILL.md .github/skills/ngspice/
+cp circuit-sim-skill/scripts/*.py .github/skills/ngspice/scripts/
 
 # Option 2: user-level (all projects)
 mkdir -p ~/.copilot/skills/ngspice/scripts
-cp ngspice-skill/SKILL.md ~/.copilot/skills/ngspice/
-cp ngspice-skill/scripts/*.py ~/.copilot/skills/ngspice/scripts/
+cp circuit-sim-skill/SKILL.md ~/.copilot/skills/ngspice/
+cp circuit-sim-skill/scripts/*.py ~/.copilot/skills/ngspice/scripts/
 ```
 
 ### Claude Code
 
 ```bash
 mkdir -p ~/.claude/skills/ngspice/scripts
-cp ngspice-skill/SKILL.md ~/.claude/skills/ngspice/
-cp ngspice-skill/scripts/*.py ~/.claude/skills/ngspice/scripts/
+cp circuit-sim-skill/SKILL.md ~/.claude/skills/ngspice/
+cp circuit-sim-skill/scripts/*.py ~/.claude/skills/ngspice/scripts/
 ```
 
 ### OpenAI Codex
 
 ```bash
 mkdir -p ~/.codex/skills/ngspice/scripts
-cp ngspice-skill/SKILL.md ~/.codex/skills/ngspice/
-cp ngspice-skill/scripts/*.py ~/.codex/skills/ngspice/scripts/
+cp circuit-sim-skill/SKILL.md ~/.codex/skills/ngspice/
+cp circuit-sim-skill/scripts/*.py ~/.codex/skills/ngspice/scripts/
 ```
 
 ## Prerequisites

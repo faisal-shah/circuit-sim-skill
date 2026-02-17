@@ -1,4 +1,4 @@
-# AGENTS.md — AI Context for ngspice-skill
+# AGENTS.md — AI Context for circuit-sim-skill
 
 ## What This Repo Is
 
