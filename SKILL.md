@@ -275,22 +275,13 @@ Manual parsing from stdout: look for `meas_name = value` lines.
 
 ## 8. Plotting Conventions
 
-Always set `matplotlib.use("Agg")` **before** importing pyplot for headless rendering.
+Always set the Agg backend **before** importing pyplot — headless environments
+hang or error otherwise:
 
 ```python
 import matplotlib
-matplotlib.use("Agg")
+matplotlib.use("Agg")  # must come before pyplot import
 import matplotlib.pyplot as plt
-
-fig, (ax_mag, ax_ph) = plt.subplots(2, 1, figsize=(10, 7), sharex=True)
-ax_mag.semilogx(freq, mag_dB, linewidth=2)
-ax_mag.axhline(-3, color="red", linestyle="--", linewidth=0.8, label="-3 dB")
-ax_mag.set_ylabel("Magnitude (dB)"); ax_mag.grid(True, which="both", alpha=0.3)
-ax_ph.semilogx(freq, phase_deg, linewidth=2, color="tab:orange")
-ax_ph.set_ylabel("Phase (°)"); ax_ph.set_xlabel("Frequency (Hz)")
-ax_ph.grid(True, which="both", alpha=0.3)
-fig.suptitle("Bode Plot", fontsize=14, fontweight="bold")
-fig.tight_layout(); fig.savefig("bode.png", dpi=150, bbox_inches="tight")
 ```
 
 ---
